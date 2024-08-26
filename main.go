@@ -3,42 +3,50 @@ package main
 import (
 	"fmt"
 	"log"
+	"log/slog"
 	"os"
 	"os/exec"
 	"runtime"
 	"time"
 )
 
-var clear map[string]func()
+var clearFuncs map[string]func()
 
 func init() {
-	clear = make(map[string]func())
-	clear["darwin"] = func() {
+	clearFuncs = make(map[string]func())
+	clearFuncs["darwin"] = func() {
 		cmd := exec.Command("clear") // Example for macOS, its tested
 		cmd.Stdout = os.Stdout
-		cmd.Run()
+		if err := cmd.Run(); err != nil {
+			panic(err)
+		}
 	}
-	clear["linux"] = func() {
+	clearFuncs["linux"] = func() {
 		cmd := exec.Command("clear") // Linux example, its tested
 		cmd.Stdout = os.Stdout
-		cmd.Run()
+		if err := cmd.Run(); err != nil {
+			panic(err)
+		}
 	}
-	clear["windows"] = func() {
+	clearFuncs["windows"] = func() {
 		cmd := exec.Command("cmd", "/c", "cls") // Windows example, its tested
 		cmd.Stdout = os.Stdout
-		cmd.Run()
+		if err := cmd.Run(); err != nil {
+			panic(err)
+		}
 	}
 }
 
-func callClear() {
-	value, ok := clear[runtime.GOOS] // Runtime.GOOS -> Linux, Windows, Darwin etc.
+func callClear() error {
+	f, ok := clearFuncs[runtime.GOOS] // Runtime.GOOS -> Linux, Windows, Darwin etc.
 	if ok {
 		// If we defined a clear function for that platform:
-		value() // We execute it
+		f() // We execute it
 	} else {
 		// Unsupported platform
-		log.Fatalf("Terminal clearing is not supported for your platform %s\n", runtime.GOOS)
+		return fmt.Errorf("terminal clearing is not supported for your platform %s", runtime.GOOS)
 	}
+	return nil
 }
 
 const (
@@ -46,7 +54,12 @@ const (
 	rows = 32
 )
 
-func render(cells [rows][cols]bool) {
+func render(cells [rows][cols]bool) error {
+	err := callClear()
+	if err != nil {
+		slog.Error(err.Error())
+	}
+
 	for i := range len(cells) {
 		if i == 0 {
 			for range cols + 2 {
@@ -76,6 +89,8 @@ func render(cells [rows][cols]bool) {
 			fmt.Println()
 		}
 	}
+
+	return nil
 }
 
 func simulate(cells [rows][cols]bool) (newCells [rows][cols]bool) {
@@ -156,9 +171,11 @@ func main() {
 	cells[4][18] = true
 
 	for {
-		callClear()
 		cells = simulate(cells)
-		render(cells)
+		err := render(cells)
+		if err != nil {
+			log.Fatal(err.Error())
+		}
 		time.Sleep(100 * time.Millisecond)
 	}
 }
