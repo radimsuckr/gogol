@@ -3,51 +3,12 @@ package main
 import (
 	"fmt"
 	"log"
-	"log/slog"
 	"os"
-	"os/exec"
-	"runtime"
+	"os/signal"
+	"strings"
+	"syscall"
 	"time"
 )
-
-var clearFuncs map[string]func()
-
-func init() {
-	clearFuncs = make(map[string]func())
-	clearFuncs["darwin"] = func() {
-		cmd := exec.Command("clear") // Example for macOS, its tested
-		cmd.Stdout = os.Stdout
-		if err := cmd.Run(); err != nil {
-			panic(err)
-		}
-	}
-	clearFuncs["linux"] = func() {
-		cmd := exec.Command("clear") // Linux example, its tested
-		cmd.Stdout = os.Stdout
-		if err := cmd.Run(); err != nil {
-			panic(err)
-		}
-	}
-	clearFuncs["windows"] = func() {
-		cmd := exec.Command("cmd", "/c", "cls") // Windows example, its tested
-		cmd.Stdout = os.Stdout
-		if err := cmd.Run(); err != nil {
-			panic(err)
-		}
-	}
-}
-
-func callClear() error {
-	f, ok := clearFuncs[runtime.GOOS] // Runtime.GOOS -> Linux, Windows, Darwin etc.
-	if ok {
-		// If we defined a clear function for that platform:
-		f() // We execute it
-	} else {
-		// Unsupported platform
-		return fmt.Errorf("terminal clearing is not supported for your platform %s", runtime.GOOS)
-	}
-	return nil
-}
 
 const (
 	cols = 64
@@ -55,42 +16,43 @@ const (
 )
 
 func render(cells [rows][cols]bool) error {
-	err := callClear()
-	if err != nil {
-		slog.Error(err.Error())
-	}
+	var buf strings.Builder
+	// Pre-allocate buffer capacity to avoid reallocations
+	// Rough estimate: (cols + 2) * (rows + 2) characters + ANSI codes
+	buf.Grow((cols + 3) * (rows + 3))
 
+	// Move cursor to home position (1,1) instead of clearing
+	buf.WriteString("\033[H")
+
+	// Top border
+	for range cols + 2 {
+		buf.WriteByte('#')
+	}
+	buf.WriteByte('\n')
+
+	// Grid rows
 	for i := range len(cells) {
-		if i == 0 {
-			for range cols + 2 {
-				fmt.Print("#")
-			}
-			fmt.Println()
-		}
+		buf.WriteByte('#')
 		for j := range len(cells[i]) {
-			if j == 0 {
-				fmt.Print("#")
-			}
-			cell := cells[i][j]
-			if cell {
-				fmt.Print("O")
+			if cells[i][j] {
+				buf.WriteByte('O')
 			} else {
-				fmt.Print(" ")
-			}
-			if j == len(cells[i])-1 {
-				fmt.Print("#")
+				buf.WriteByte(' ')
 			}
 		}
-		fmt.Println()
-		if i == len(cells)-1 {
-			for range cols + 2 {
-				fmt.Print("#")
-			}
-			fmt.Println()
-		}
+		buf.WriteByte('#')
+		buf.WriteByte('\n')
 	}
 
-	return nil
+	// Bottom border
+	for range cols + 2 {
+		buf.WriteByte('#')
+	}
+	buf.WriteByte('\n')
+
+	// Write entire buffer at once to minimize flickering
+	_, err := os.Stdout.Write([]byte(buf.String()))
+	return err
 }
 
 func simulate(cells [rows][cols]bool) (newCells [rows][cols]bool) {
@@ -148,6 +110,27 @@ func simulate(cells [rows][cols]bool) (newCells [rows][cols]bool) {
 }
 
 func main() {
+	// Enable ANSI escape codes on Windows
+	if err := enableANSI(); err != nil {
+		log.Printf("Warning: Failed to enable ANSI support: %v\n", err)
+	}
+
+	// Set up signal handler to restore cursor on CTRL+C
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-sigChan
+		// Restore cursor and exit cleanly
+		fmt.Print("\033[?25h")
+		os.Exit(0)
+	}()
+
+	// Clear screen once and hide cursor for cleaner rendering
+	fmt.Print("\033[2J\033[H\033[?25l")
+
+	// Ensure cursor is shown again on normal exit
+	defer fmt.Print("\033[?25h")
+
 	cells := [rows][cols]bool{}
 	cells[9][9] = true
 	cells[9][10] = true
@@ -176,6 +159,6 @@ func main() {
 		if err != nil {
 			log.Fatal(err.Error())
 		}
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(1000 / 60 * time.Millisecond)
 	}
 }
